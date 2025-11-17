@@ -1218,6 +1218,7 @@ def ai_assistant():
             'error': f'Error: {str(e)}'
         }), 500
 
-    # Render requires direct app.run (no __main__ block)
-app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+    if __name__ == "__main__":
+    # For local testing
+    app.run(host="0.0.0.0", port=5001, debug=True)
 
