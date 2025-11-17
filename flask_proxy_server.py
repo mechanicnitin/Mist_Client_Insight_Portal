@@ -1218,26 +1218,6 @@ def ai_assistant():
             'error': f'Error: {str(e)}'
         }), 500
 
-if __name__ == '__main__':
-    print("=" * 60)
-    print("🚀 Juniper Mist Client Insights Dashboard")
-    print("   Flask Proxy Server - PORT 5002 (ENHANCED)")
-    print("=" * 60)
-    print("\n🧠 INTELLIGENT API ROUTING ENABLED")
-    print("   ✓ Automatic intent detection from user queries")
-    print("   ✓ Dynamic API call routing based on question")
-    print("   ✓ Multi-step API calls (synthetic test, etc.)")
-    print("   ✓ Real-time data fetching and analysis")
-    print("\n📡 Starting server with CONCURRENT SEARCH...")
-    print("\n✅ Server URL: http://localhost:5002")
-    print("✅ Searches across ALL sites automatically")
-    print("⚡ Uses parallel requests for faster searches")
-    print("🔍 Advanced event analysis and pattern detection")
-    print("🤖 AI-powered troubleshooting with live data")
-    print("\n💡 Make sure index.html is in the same directory!")
-    print("\n🔧 Press CTRL+C to stop")
-    print("=" * 60)
-    print()
+    # Render requires direct app.run (no __main__ block)
+app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
 
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
