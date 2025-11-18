@@ -1121,6 +1121,7 @@ def get_status_code_explanation(code):
 def ai_assistant():
     """
     Enhanced AI Assistant with Guardrails Bedrock Claude and intelligent API routing
+    Automatically detects intent and fetches relevant data from Mist APIs
     """
     try:
         data = request.get_json()
@@ -1169,9 +1170,14 @@ def ai_assistant():
 - If metrics indicate issues, explain the root cause and remediation steps
 - Be concise but thorough"""
         
-        # STEP 4: Call Guardrails Bedrock Claude API
+        # STEP 4: Call Guardrails Bedrock Claude API with enhanced debugging
         try:
             print("🔧 Calling Guardrails Bedrock Claude API...")
+            print(f"   🔗 Base URL: {GUARDRAILS_BEDROCK_CONFIG['base_url']}")
+            print(f"   🤖 Model: {GUARDRAILS_BEDROCK_CONFIG['model']}")
+            print(f"   🔑 API Key: {GUARDRAILS_BEDROCK_CONFIG['api_key'][:20]}...")
+            print(f"   📝 Prompt length: {len(full_prompt)} chars")
+            
             client = OpenAI(
                 base_url=GUARDRAILS_BEDROCK_CONFIG['base_url'],
                 api_key=GUARDRAILS_BEDROCK_CONFIG['api_key']
@@ -1198,12 +1204,57 @@ def ai_assistant():
             print("✅ Guardrails API call successful")
             
         except Exception as api_error:
-            print(f"❌ Guardrails API Error: {str(api_error)}")
-            return jsonify({
-                'success': False,
-                'error': f'Guardrails API error: {str(api_error)}'
-            }), 500
+            print(f"❌ Guardrails API Error Details:")
+            print(f"   Error Type: {type(api_error).__name__}")
+            print(f"   Error Message: {str(api_error)}")
+            
+            # Detailed error logging
+            import traceback
+            print("   Full Traceback:")
+            traceback.print_exc()
+            
+            # Test API endpoint connectivity
+            try:
+                import requests
+                test_response = requests.get(GUARDRAILS_BEDROCK_CONFIG['base_url'], timeout=5)
+                print(f"   📡 Endpoint Status: {test_response.status_code}")
+            except Exception as conn_error:
+                print(f"   📡 Endpoint Test Failed: {str(conn_error)}")
+            
+            # FALLBACK: Return analysis without AI processing
+            if api_data:
+                fallback_answer = f"""⚠️ AI service temporarily unavailable. Here's the raw data analysis:
+
+**FETCHED DATA:**
+{api_context[:1000] if api_context else 'No additional data fetched'}
+
+**BASIC ANALYSIS:**
+- Client: {mac_address}
+- Site: {site_name}
+- APIs Called: {list(api_data.keys())}
+- Data Available: {'Yes' if api_data else 'No'}
+
+**NEXT STEPS:**
+Please check the data above or try again later when the AI service is restored."""
+                
+                return jsonify({
+                    'success': True,
+                    'answer': fallback_answer,
+                    'model': 'fallback-mode',
+                    'data_fetched': bool(api_data),
+                    'apis_called': list(api_data.keys()) if api_data else [],
+                    'error_details': f'{type(api_error).__name__}: {str(api_error)}',
+                    'fallback_used': True
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': f'Guardrails API error: {type(api_error).__name__}: {str(api_error)}',
+                    'error_type': type(api_error).__name__,
+                    'endpoint_status': 'unknown'
+                }), 500
         
+        # Success response
         apis_called = list(api_data.keys()) if api_data else []
         
         print(f"✅ AI Response Generated ({len(answer)} chars)")
@@ -1214,14 +1265,19 @@ def ai_assistant():
             'answer': answer,
             'model': 'guardrails-bedrock-claude-4sonnet',
             'data_fetched': bool(api_data),
-            'apis_called': apis_called
+            'apis_called': apis_called,
+            'response_length': len(answer),
+            'fallback_used': False
         })
         
     except Exception as e:
-        print(f"❌ AI Assistant Error: {str(e)}")
+        print(f"❌ AI Assistant General Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': f'Error: {str(e)}'
+            'error': f'General error: {str(e)}',
+            'error_type': type(e).__name__
         }), 500
 
     if __name__ == "__main__":
