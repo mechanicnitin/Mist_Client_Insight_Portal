@@ -19,18 +19,29 @@ MIST_CONFIG = {
     'access_token': 'cNfM9IUSfCOBno1eU80eGldJZtxF3e4BgAPQSU4AM9WvGnDAYE6lgDbbK9lygEEiCa6uao9pcls1td05IIFfMXd2J5lMFKjn'
 }
 
-# ADD THIS NEW CONFIGURATION:
+# Guardrails Bedrock Claude Configuration
+GENAI_STUDIO_API_KEY = 'sk-IpjkSwcGwfL2jz7LtiQ55Q'
+
 GUARDRAILS_BEDROCK_CONFIG = {
-    'api_key': 'sk-IpjkSwcGwfL2jz7LtiQ55Q',
-    'base_url': 'https://api.studio.genai.cba',  # CORRECTED KEY AND URL
+    'api_key': GENAI_STUDIO_API_KEY,
+    'base_url': 'https://api.studio.genai.cba',
     'model': 'guardrails-bedrock-claude-4sonnet'
 }
 
+# Set environment variables for OpenAI client to work with GenAI Studio
+import os
+os.environ.update({
+    "OPENAI_API_KEY": f"{GENAI_STUDIO_API_KEY}",
+    "OPENAI_BASE_URL": "https://api.studio.genai.cba",
+    "NO_PROXY": os.environ.get("NO_PROXY", "") + (",.cba" if os.environ.get("NO_PROXY") else ".cba")
+})
+
 # Print configuration for validation
-print(f"🔧 Using Guardrails Bedrock Claude:")
+print(f"🔧 Using GenAI Studio with Guardrails Bedrock Claude:")
 print(f"   URL: {GUARDRAILS_BEDROCK_CONFIG['base_url']}")
 print(f"   Model: {GUARDRAILS_BEDROCK_CONFIG['model']}")
-
+print(f"   Environment API Key Set: {'Yes' if os.environ.get('OPENAI_API_KEY') else 'No'}")
+print(f"   Environment Base URL Set: {os.environ.get('OPENAI_BASE_URL', 'Not Set')}")
 
 # Thread-safe cache for AP and WLAN mappings
 cache = {
@@ -1117,10 +1128,14 @@ def get_status_code_explanation(code):
 # ENHANCED AI ASSISTANT WITH INTELLIGENT API ROUTING
 # ============================================================================
 
+# ============================================================================
+# ENHANCED AI ASSISTANT WITH GENAI STUDIO GUARDRAILS BEDROCK CLAUDE
+# ============================================================================
+
 @app.route('/api/ai-assistant', methods=['POST'])
 def ai_assistant():
     """
-    Enhanced AI Assistant with Guardrails Bedrock Claude and intelligent API routing
+    Enhanced AI Assistant with GenAI Studio Guardrails Bedrock Claude and intelligent API routing
     Automatically detects intent and fetches relevant data from Mist APIs
     """
     try:
@@ -1170,18 +1185,17 @@ def ai_assistant():
 - If metrics indicate issues, explain the root cause and remediation steps
 - Be concise but thorough"""
         
-        # STEP 4: Call Guardrails Bedrock Claude API with enhanced debugging
+        # STEP 4: Call GenAI Studio Guardrails Bedrock Claude API
         try:
-            print("🔧 Calling Guardrails Bedrock Claude API...")
-            print(f"   🔗 Base URL: {GUARDRAILS_BEDROCK_CONFIG['base_url']}")
+            print("🔧 Calling GenAI Studio Guardrails Bedrock Claude API...")
+            print(f"   🔗 Base URL: {os.environ.get('OPENAI_BASE_URL')}")
             print(f"   🤖 Model: {GUARDRAILS_BEDROCK_CONFIG['model']}")
-            print(f"   🔑 API Key: {GUARDRAILS_BEDROCK_CONFIG['api_key'][:20]}...")
+            print(f"   🔑 API Key: {os.environ.get('OPENAI_API_KEY', '')[:20]}...")
             print(f"   📝 Prompt length: {len(full_prompt)} chars")
+            print(f"   🌐 NO_PROXY: {os.environ.get('NO_PROXY', 'Not Set')}")
             
-            client = OpenAI(
-                base_url=GUARDRAILS_BEDROCK_CONFIG['base_url'],
-                api_key=GUARDRAILS_BEDROCK_CONFIG['api_key']
-            )
+            # Use environment variables (OpenAI client will pick them up automatically)
+            client = OpenAI()  # No need to specify base_url and api_key - uses env vars
             
             response = client.chat.completions.create(
                 model=GUARDRAILS_BEDROCK_CONFIG['model'],
@@ -1201,12 +1215,16 @@ def ai_assistant():
             )
             
             answer = response.choices[0].message.content
-            print("✅ Guardrails API call successful")
+            print("✅ GenAI Studio API call successful")
             
         except Exception as api_error:
-            print(f"❌ Guardrails API Error Details:")
+            print(f"❌ GenAI Studio API Error Details:")
             print(f"   Error Type: {type(api_error).__name__}")
             print(f"   Error Message: {str(api_error)}")
+            print(f"   Environment Check:")
+            print(f"     - OPENAI_API_KEY: {'Set' if os.environ.get('OPENAI_API_KEY') else 'Not Set'}")
+            print(f"     - OPENAI_BASE_URL: {os.environ.get('OPENAI_BASE_URL', 'Not Set')}")
+            print(f"     - NO_PROXY: {os.environ.get('NO_PROXY', 'Not Set')}")
             
             # Detailed error logging
             import traceback
@@ -1216,17 +1234,21 @@ def ai_assistant():
             # Test API endpoint connectivity
             try:
                 import requests
-                test_response = requests.get(GUARDRAILS_BEDROCK_CONFIG['base_url'], timeout=5)
-                print(f"   📡 Endpoint Status: {test_response.status_code}")
+                test_url = os.environ.get('OPENAI_BASE_URL', '')
+                if test_url:
+                    test_response = requests.get(test_url, timeout=10)
+                    print(f"   📡 Endpoint Status: {test_response.status_code}")
+                else:
+                    print("   📡 No base URL set for testing")
             except Exception as conn_error:
                 print(f"   📡 Endpoint Test Failed: {str(conn_error)}")
             
             # FALLBACK: Return analysis without AI processing
             if api_data:
-                fallback_answer = f"""⚠️ AI service temporarily unavailable. Here's the raw data analysis:
+                fallback_answer = f"""⚠️ GenAI Studio service temporarily unavailable. Here's the raw data analysis:
 
 **FETCHED DATA:**
-{api_context[:1000] if api_context else 'No additional data fetched'}
+{api_context[:1500] if api_context else 'No additional data fetched'}
 
 **BASIC ANALYSIS:**
 - Client: {mac_address}
@@ -1235,23 +1257,33 @@ def ai_assistant():
 - Data Available: {'Yes' if api_data else 'No'}
 
 **NEXT STEPS:**
-Please check the data above or try again later when the AI service is restored."""
+Please check the data above or try again later when the GenAI Studio service is restored.
+
+**ERROR DETAILS:**
+- Error Type: {type(api_error).__name__}
+- Connection Issue: Unable to reach GenAI Studio API"""
                 
                 return jsonify({
                     'success': True,
                     'answer': fallback_answer,
-                    'model': 'fallback-mode',
+                    'model': 'fallback-analysis-mode',
                     'data_fetched': bool(api_data),
                     'apis_called': list(api_data.keys()) if api_data else [],
                     'error_details': f'{type(api_error).__name__}: {str(api_error)}',
-                    'fallback_used': True
+                    'fallback_used': True,
+                    'service_status': 'genai_studio_unavailable'
                 })
             else:
                 return jsonify({
                     'success': False,
-                    'error': f'Guardrails API error: {type(api_error).__name__}: {str(api_error)}',
+                    'error': f'GenAI Studio API error: {type(api_error).__name__}: {str(api_error)}',
                     'error_type': type(api_error).__name__,
-                    'endpoint_status': 'unknown'
+                    'service_status': 'genai_studio_connection_failed',
+                    'environment_check': {
+                        'api_key_set': bool(os.environ.get('OPENAI_API_KEY')),
+                        'base_url_set': bool(os.environ.get('OPENAI_BASE_URL')),
+                        'no_proxy_set': bool(os.environ.get('NO_PROXY'))
+                    }
                 }), 500
         
         # Success response
@@ -1267,7 +1299,8 @@ Please check the data above or try again later when the AI service is restored."
             'data_fetched': bool(api_data),
             'apis_called': apis_called,
             'response_length': len(answer),
-            'fallback_used': False
+            'fallback_used': False,
+            'service_status': 'genai_studio_active'
         })
         
     except Exception as e:
@@ -1279,7 +1312,6 @@ Please check the data above or try again later when the AI service is restored."
             'error': f'General error: {str(e)}',
             'error_type': type(e).__name__
         }), 500
-
     if __name__ == "__main__":
     # For local testing
         app.run(host="0.0.0.0", port=5001, debug=True)
