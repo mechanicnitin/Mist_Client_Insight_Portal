@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 from collections import Counter
 import re
+from openai import OpenAI  # Added for Guardrails Bedrock Claude
 
 app = Flask(__name__, static_folder='.')
 CORS(app)
@@ -24,6 +25,10 @@ GUARDRAILS_BEDROCK_CONFIG = {
     'api_url': 'https://api.guardrails.com/v1/chat/completions',  # Assuming standard endpoint
     'model': 'guardrails-bedrock-claude-4sonnet'
 }
+# Print configuration for validation
+print(f"🔧 Using Guardrails Bedrock Claude:")
+print(f"   URL: {GUARDRAILS_BEDROCK_CONFIG['base_url']}")
+print(f"   Model: {GUARDRAILS_BEDROCK_CONFIG['model']}")
 
 # Thread-safe cache for AP and WLAN mappings
 cache = {
@@ -1113,31 +1118,30 @@ def get_status_code_explanation(code):
 @app.route('/api/ai-assistant', methods=['POST'])
 def ai_assistant():
     """
-    Enhanced AI Assistant with intelligent API routing
-    Automatically detects intent and fetches relevant data from Mist APIs
+    Enhanced AI Assistant with Guardrails Bedrock Claude and intelligent API routing
     """
     try:
         data = request.get_json()
         question = data.get('question', '')
         context = data.get('context', {})
-
+        
         if not question:
             return jsonify({'success': False, 'error': 'Question is required'}), 400
-
+        
         mac_address = context.get('mac_address', 'Unknown')
         site_name = context.get('site_name', 'Unknown')
         site_id = context.get('site_id', '')
         latest_event = context.get('latest_event', 'None')
         issues = context.get('issues', [])
-
+        
         print(f"🤖 AI Assistant Query: {question[:80]}...")
-
+        
         # STEP 1: Intelligent API Routing - Detect intent and fetch data
         api_data = intelligent_api_router(question, context)
         
         # STEP 2: Format fetched data for AI context
         api_context = format_api_data_for_ai(api_data) if api_data else ""
-
+        
         # STEP 3: Build comprehensive prompt
         base_context = f"""You are a Juniper Mist wireless network expert troubleshooting client connectivity issues.
 
@@ -1146,9 +1150,8 @@ def ai_assistant():
 - Site: {site_name}
 - Latest Event: {latest_event}
 - Detected Issues: {', '.join(issues[:3]) if issues else 'None detected'}"""
-
-        full_prompt = base_context
         
+        full_prompt = base_context
         if api_context:
             full_prompt += f"\n\n{api_context}"
         
@@ -1163,83 +1166,57 @@ def ai_assistant():
 - Explain what the metrics mean in context
 - If metrics indicate issues, explain the root cause and remediation steps
 - Be concise but thorough"""
-
-        # STEP 4: Call Guardrails Bedrock Claude API (REPLACE existing Perplexity call)
-        headers = {
-            'Authorization': f'Bearer {GUARDRAILS_BEDROCK_CONFIG["api_key"]}',
-            'Content-Type': 'application/json'
-        }
-
-        payload = {
-            'model': GUARDRAILS_BEDROCK_CONFIG['model'],
-            'messages': [
-                {'role': 'system', 'content': 'You are an expert Juniper Mist wireless network engineer with deep knowledge of WiFi troubleshooting, 802.11 protocols, and network diagnostics.'},
-                {'role': 'user', 'content': full_prompt}
-            ],
-            'max_tokens': 2000,
-            'temperature': 0.2,
-            'stream': False
-        }
-
-        response = requests.post(
-            GUARDRAILS_BEDROCK_CONFIG['api_url'],
-            headers=headers,
-            json=payload,
-            timeout=45
-        )
-
-        if response.status_code != 200:
+        
+        # STEP 4: Call Guardrails Bedrock Claude API
+        try:
+            print("🔧 Calling Guardrails Bedrock Claude API...")
+            client = OpenAI(
+                base_url=GUARDRAILS_BEDROCK_CONFIG['base_url'],
+                api_key=GUARDRAILS_BEDROCK_CONFIG['api_key']
+            )
+            
+            response = client.chat.completions.create(
+                model=GUARDRAILS_BEDROCK_CONFIG['model'],
+                messages=[
+                    {
+                        'role': 'system', 
+                        'content': 'You are an expert Juniper Mist wireless network engineer with deep knowledge of WiFi troubleshooting, 802.11 protocols, and network diagnostics.'
+                    },
+                    {
+                        'role': 'user', 
+                        'content': full_prompt
+                    }
+                ],
+                max_tokens=2000,
+                temperature=0.2,
+                stream=False
+            )
+            
+            answer = response.choices[0].message.content
+            print("✅ Guardrails API call successful")
+            
+        except Exception as api_error:
+            print(f"❌ Guardrails API Error: {str(api_error)}")
             return jsonify({
                 'success': False,
-                'error': f'AI service error (Status {response.status_code})'
+                'error': f'Guardrails API error: {str(api_error)}'
             }), 500
-            # STEP 4: Call Guardrails Bedrock Claude API
-try:
-    from openai import OpenAI
-    
-    client = OpenAI(
-        base_url=GUARDRAILS_BEDROCK_CONFIG['base_url'],
-        api_key=GUARDRAILS_BEDROCK_CONFIG['api_key']
-    )
-    
-    response = client.chat.completions.create(
-        model=GUARDRAILS_BEDROCK_CONFIG['model'],
-        messages=[
-            {'role': 'system', 'content': 'You are an expert Juniper Mist wireless network engineer with deep knowledge of WiFi troubleshooting, 802.11 protocols, and network diagnostics.'},
-            {'role': 'user', 'content': full_prompt}
-        ],
-        max_tokens=2000,
-        temperature=0.2,
-        stream=False
-    )
-    
-    answer = response.choices[0].message.content
-    
-except Exception as e:
-    return jsonify({
-        'success': False,
-        'error': f'AI service error: {str(e)}'
-    }), 500
-
-        result = response.json()
-        answer = result['choices'][0]['message']['content']
-
+        
         apis_called = list(api_data.keys()) if api_data else []
+        
         print(f"✅ AI Response Generated ({len(answer)} chars)")
-        print(f"   📡 APIs Called: {apis_called if apis_called else 'None (using cached context)'}")
-
+        print(f"   📡 APIs Called: {apis_called if apis_called else 'None'}")
+        
         return jsonify({
             'success': True,
             'answer': answer,
-            'model': 'guardrails-bedrock-claude-4sonnet',  # UPDATE model name
+            'model': 'guardrails-bedrock-claude-4sonnet',
             'data_fetched': bool(api_data),
             'apis_called': apis_called
         })
-
+        
     except Exception as e:
         print(f"❌ AI Assistant Error: {str(e)}")
-        import traceback
-        traceback.print_exc()
         return jsonify({
             'success': False,
             'error': f'Error: {str(e)}'
