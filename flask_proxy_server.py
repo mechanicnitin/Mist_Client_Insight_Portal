@@ -22,13 +22,15 @@ MIST_CONFIG = {
 # ADD THIS NEW CONFIGURATION:
 GUARDRAILS_BEDROCK_CONFIG = {
     'api_key': 'sk-IpjkSwcGwfL2jz7LtiQ55Q',
-    'api_url': 'https://api.guardrails.com/v1/chat/completions',  # Assuming standard endpoint
+    'base_url': 'https://api.studio.genai.cba',  # CORRECTED KEY AND URL
     'model': 'guardrails-bedrock-claude-4sonnet'
 }
+
 # Print configuration for validation
 print(f"🔧 Using Guardrails Bedrock Claude:")
 print(f"   URL: {GUARDRAILS_BEDROCK_CONFIG['base_url']}")
 print(f"   Model: {GUARDRAILS_BEDROCK_CONFIG['model']}")
+
 
 # Thread-safe cache for AP and WLAN mappings
 cache = {
