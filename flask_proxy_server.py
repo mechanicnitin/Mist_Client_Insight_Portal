@@ -20,7 +20,7 @@ MIST_CONFIG = {
 }
 
 # Guardrails Bedrock Claude Configuration
-GENAI_STUDIO_API_KEY = 'sk-IpjkSwcGwfL2jz7LtiQ55Q'
+GENAI_STUDIO_API_KEY = 'sk-ipIpyaxyS2NSJWAHbg8IiQ'
 
 GUARDRAILS_BEDROCK_CONFIG = {
     'api_key': GENAI_STUDIO_API_KEY,
