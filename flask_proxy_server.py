@@ -24,12 +24,6 @@ PERPLEXITY_CONFIG = {
     'api_key': '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',
     'api_url': 'https://api.perplexity.ai/chat/completions',
     'model': 'sonar'
-# ADD THIS NEW CONFIGURATION:
-GUARDRAILS_BEDROCK_CONFIG = {
-    'api_key': 'sk-IpjkSwcGwfL2jz7LtiQ55Q',
-    'api_url': 'https://api.guardrails.com/v1/chat/completions',  # Assuming standard endpoint
-    'model': 'guardrails-bedrock-claude-4sonnet'
-}
 
 # Thread-safe cache for AP and WLAN mappings
 cache = {
@@ -1171,16 +1165,13 @@ def ai_assistant():
 - Be concise but thorough"""
 
         # STEP 4: Call Perplexity API
-        # STEP 4: Call Guardrails Bedrock Claude API (REPLACE existing Perplexity call)
         headers = {
             'Authorization': f'Bearer {PERPLEXITY_CONFIG["api_key"]}',
-            'Authorization': f'Bearer {GUARDRAILS_BEDROCK_CONFIG["api_key"]}',
             'Content-Type': 'application/json'
         }
 
         payload = {
             'model': 'sonar',
-            'model': GUARDRAILS_BEDROCK_CONFIG['model'],
             'messages': [
                 {'role': 'system', 'content': 'You are an expert Juniper Mist wireless network engineer with deep knowledge of WiFi troubleshooting, 802.11 protocols, and network diagnostics.'},
                 {'role': 'user', 'content': full_prompt}
@@ -1192,7 +1183,6 @@ def ai_assistant():
 
         response = requests.post(
             PERPLEXITY_CONFIG['api_url'],
-            GUARDRAILS_BEDROCK_CONFIG['api_url'],
             headers=headers,
             json=payload,
             timeout=45
@@ -1203,33 +1193,6 @@ def ai_assistant():
                 'success': False,
                 'error': f'AI service error (Status {response.status_code})'
             }), 500
-            # STEP 4: Call Guardrails Bedrock Claude API
-try:
-    from openai import OpenAI
-    
-    client = OpenAI(
-        base_url=GUARDRAILS_BEDROCK_CONFIG['base_url'],
-        api_key=GUARDRAILS_BEDROCK_CONFIG['api_key']
-    )
-    
-    response = client.chat.completions.create(
-        model=GUARDRAILS_BEDROCK_CONFIG['model'],
-        messages=[
-            {'role': 'system', 'content': 'You are an expert Juniper Mist wireless network engineer with deep knowledge of WiFi troubleshooting, 802.11 protocols, and network diagnostics.'},
-            {'role': 'user', 'content': full_prompt}
-        ],
-        max_tokens=2000,
-        temperature=0.2,
-        stream=False
-    )
-    
-    answer = response.choices[0].message.content
-    
-except Exception as e:
-    return jsonify({
-        'success': False,
-        'error': f'AI service error: {str(e)}'
-    }), 500
 
         result = response.json()
         answer = result['choices'][0]['message']['content']
@@ -1242,7 +1205,6 @@ except Exception as e:
             'success': True,
             'answer': answer,
             'model': 'sonar',
-            'model': 'guardrails-bedrock-claude-4sonnet',  # UPDATE model name
             'data_fetched': bool(api_data),
             'apis_called': apis_called
         })
