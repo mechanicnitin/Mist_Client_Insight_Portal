@@ -1,4 +1,3 @@
-@@ -1,1224 +1,1251 @@
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import requests
@@ -24,6 +23,7 @@ PERPLEXITY_CONFIG = {
     'api_key': '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',
     'api_url': 'https://api.perplexity.ai/chat/completions',
     'model': 'sonar'
+}
 
 # Thread-safe cache for AP and WLAN mappings
 cache = {
@@ -152,7 +152,7 @@ def search_client_in_site(site, mac_no_colon):
     """Search for a client in a specific site (thread-safe function)"""
     site_id = site['id']
     site_name = site['name']
-
+    
     try:
         search_url = f"{MIST_CONFIG['base_url']}/sites/{site_id}/clients/search"
         params = {
@@ -177,7 +177,7 @@ def search_client_in_site(site, mac_no_colon):
                 }
     except Exception as e:
         print(f"  ⚠️ Error checking site {site_name}: {str(e)}")
-
+    
     return {'found': False}
 
 def get_ap_name(ap_mac):
@@ -206,7 +206,7 @@ def detect_api_intent(question, context):
     """
     question_lower = question.lower()
     detected_intents = {}
-
+    
     for intent_name, intent_config in API_PATTERNS.items():
         # Check if any keywords match
         matches = sum(1 for keyword in intent_config['keywords'] if keyword in question_lower)
@@ -216,12 +216,12 @@ def detect_api_intent(question, context):
                 'endpoints': intent_config['endpoints'],
                 'description': intent_config['description']
             }
-
+    
     # Sort by confidence (number of keyword matches)
     detected_intents = dict(sorted(detected_intents.items(), 
                                   key=lambda x: x[1]['confidence'], 
                                   reverse=True))
-
+    
     return detected_intents
 
 def fetch_synthetic_test_data(site_id, mac_address):
@@ -234,7 +234,7 @@ def fetch_synthetic_test_data(site_id, mac_address):
     try:
         end_time = int(datetime.now().timestamp())
         start_time = int((datetime.now() - timedelta(days=7)).timestamp())
-
+        
         # Step 1: Get test results to find test_id
         url = f"{MIST_CONFIG['base_url']}/labs/orgs/{MIST_CONFIG['org_id']}/synthetic_test"
         params = {
@@ -245,34 +245,34 @@ def fetch_synthetic_test_data(site_id, mac_address):
             'limit': 100,
             'page': 1
         }
-
+        
         print(f"   🔍 Step 1: Fetching synthetic test results...")
         response = requests.get(url, headers=get_headers(), params=params, timeout=30)
         response.raise_for_status()
-
+        
         results = response.json()
-
+        
         # Handle different response formats
         if isinstance(results, dict) and 'data' in results:
             results = results['data']
-
+        
         if not results or len(results) == 0:
             print(f"   ⚠️ No synthetic test results found")
             return None
-
+        
         # Get latest test_id
         if isinstance(results, list):
             latest_test = results[0]
             test_id = latest_test.get('test_id')
         else:
             test_id = results.get('test_id')
-
+        
         if not test_id:
             print(f"   ⚠️ No test_id found in results")
             return None
-
+        
         print(f"   ✅ Found latest test_id: {test_id}")
-
+        
         # Step 2: Get detailed test data using test_id
         detail_params = {
             'q': 'test_details',
@@ -280,16 +280,16 @@ def fetch_synthetic_test_data(site_id, mac_address):
             'site_id': site_id,
             'test_id': test_id
         }
-
+        
         print(f"   🔍 Step 2: Fetching test details for test_id={test_id}...")
         detail_response = requests.get(url, headers=get_headers(), params=detail_params, timeout=30)
         detail_response.raise_for_status()
-
+        
         detailed_data = detail_response.json()
         print(f"   ✅ Got detailed synthetic test data")
-
+        
         return detailed_data
-
+        
     except Exception as e:
         print(f"   ❌ Error fetching synthetic test: {str(e)}")
         return None
@@ -301,7 +301,7 @@ def parse_synthetic_test_metrics(test_data):
     """
     if not test_data or 'data' not in test_data:
         return None
-
+    
     metrics = {
         'dhcp': None,
         'dns': None,
@@ -310,27 +310,27 @@ def parse_synthetic_test_metrics(test_data):
         'ap_name': None,
         'test_time': None
     }
-
+    
     try:
         data = test_data['data']
         test_details = data.get('test_details', [])
-
+        
         # Get test metadata
         metrics['test_time'] = datetime.fromtimestamp(data.get('start_time', 0)).strftime('%Y-%m-%d %H:%M:%S')
-
+        
         for detail in test_details:
             ap_name = detail.get('ap_name', 'Unknown')
             metrics['ap_name'] = ap_name
-
+            
             vlans = detail.get('vlans', [])
-
+            
             for vlan in vlans:
                 connectivity = vlan.get('connectivity', [])
-
+                
                 for conn in connectivity:
                     test_type = conn.get('test_type')
                     test_detail = conn.get('test_detail', {})
-
+                    
                     # Parse DHCP
                     if test_type == 'DHCP':
                         dhcpv4 = test_detail.get('dhcpv4', {})
@@ -346,12 +346,12 @@ def parse_synthetic_test_metrics(test_data):
                             'summary': dhcpv4.get('summary'),
                             'status': conn.get('test_status')
                         }
-
+                    
                     # Parse DNS
                     elif test_type == 'DNS':
                         urls = test_detail.get('urls', [])
                         latencies = [u.get('latency', 0) for u in urls if u.get('latency')]
-
+                        
                         metrics['dns'] = {
                             'status': conn.get('test_status'),
                             'failed_servers': conn.get('failed_servers', []),
@@ -362,7 +362,7 @@ def parse_synthetic_test_metrics(test_data):
                             'urls_tested': len(urls),
                             'test_details': urls[:5]  # First 5 URL tests
                         }
-
+                    
                     # Parse ARP
                     elif test_type == 'ARP':
                         ips = test_detail.get('ips', [])
@@ -373,7 +373,7 @@ def parse_synthetic_test_metrics(test_data):
                                 'gateway_mac': ips[0].get('mac'),
                                 'status': conn.get('test_status')
                             }
-
+                    
                     # Parse Application/CURL
                     elif test_type in ['CURL', 'APPLICATION']:
                         urls = test_detail.get('urls', [])
@@ -383,9 +383,9 @@ def parse_synthetic_test_metrics(test_data):
                             'failed_urls': conn.get('failed_urls', []),
                             'test_details': urls[:5]
                         }
-
+        
         return metrics
-
+        
     except Exception as e:
         print(f"   ❌ Error parsing synthetic test metrics: {str(e)}")
         return None
@@ -395,14 +395,14 @@ def fetch_client_wireless_stats(site_id, mac_address):
     try:
         mac_no_colon = mac_address.replace(':', '')
         url = f"{MIST_CONFIG['base_url']}/sites/{site_id}/stats/clients/{mac_no_colon}"
-
+        
         print(f"   🔍 Fetching client wireless stats...")
         response = requests.get(url, headers=get_headers(), timeout=30)
         response.raise_for_status()
-
+        
         stats = response.json()
         print(f"   ✅ Got client wireless stats")
-
+        
         return {
             'rssi': stats.get('rssi'),
             'snr': stats.get('snr'),
@@ -419,7 +419,7 @@ def fetch_client_wireless_stats(site_id, mac_address):
             'uptime': stats.get('uptime'),
             'idle_time': stats.get('idle_time')
         }
-
+        
     except Exception as e:
         print(f"   ❌ Error fetching client stats: {str(e)}")
         return None
@@ -428,14 +428,14 @@ def fetch_ap_stats(site_id, ap_mac):
     """Fetch AP statistics"""
     try:
         url = f"{MIST_CONFIG['base_url']}/sites/{site_id}/stats/devices/{ap_mac}"
-
+        
         print(f"   🔍 Fetching AP stats for {ap_mac}...")
         response = requests.get(url, headers=get_headers(), timeout=30)
         response.raise_for_status()
-
+        
         stats = response.json()
         print(f"   ✅ Got AP stats")
-
+        
         return {
             'name': stats.get('name'),
             'model': stats.get('model'),
@@ -447,7 +447,7 @@ def fetch_ap_stats(site_id, ap_mac):
             'version': stats.get('version'),
             'ip': stats.get('ip')
         }
-
+        
     except Exception as e:
         print(f"   ❌ Error fetching AP stats: {str(e)}")
         return None
@@ -456,14 +456,14 @@ def fetch_wlan_config(site_id):
     """Fetch WLAN/SSID configuration"""
     try:
         url = f"{MIST_CONFIG['base_url']}/sites/{site_id}/wlans"
-
+        
         print(f"   🔍 Fetching WLAN configurations...")
         response = requests.get(url, headers=get_headers(), timeout=30)
         response.raise_for_status()
-
+        
         wlans = response.json()
         print(f"   ✅ Got {len(wlans)} WLAN configs")
-
+        
         # Parse relevant WLAN info
         wlan_list = []
         for wlan in wlans:
@@ -476,9 +476,9 @@ def fetch_wlan_config(site_id):
                 'band': wlan.get('band'),
                 'hide_ssid': wlan.get('hide_ssid')
             })
-
+        
         return wlan_list
-
+        
     except Exception as e:
         print(f"   ❌ Error fetching WLAN config: {str(e)}")
         return None
@@ -488,18 +488,18 @@ def format_api_data_for_ai(api_data):
     Format fetched API data into structured text for AI context
     """
     context_parts = []
-
+    
     # Synthetic Test Metrics
     if 'synthetic_test' in api_data and api_data['synthetic_test']:
         metrics = api_data['synthetic_test']
-
+        
         context_parts.append("=" * 60)
         context_parts.append("📊 REAL-TIME SYNTHETIC TEST RESULTS")
         context_parts.append("=" * 60)
         context_parts.append(f"Test Run From: {metrics.get('ap_name', 'Unknown AP')}")
         context_parts.append(f"Test Time: {metrics.get('test_time', 'N/A')}")
         context_parts.append("")
-
+        
         # DHCP Metrics
         if metrics.get('dhcp'):
             dhcp = metrics['dhcp']
@@ -514,7 +514,7 @@ def format_api_data_for_ai(api_data):
             context_parts.append(f"   State: {dhcp['state']}")
             context_parts.append(f"   Summary: {dhcp['summary']}")
             context_parts.append("")
-
+        
         # DNS Metrics
         if metrics.get('dns'):
             dns = metrics['dns']
@@ -525,7 +525,7 @@ def format_api_data_for_ai(api_data):
             context_parts.append(f"   Failed Servers: {', '.join(dns['failed_servers']) if dns['failed_servers'] else 'None'}")
             context_parts.append(f"   Failed URLs: {', '.join(dns['failed_urls'][:3]) if dns['failed_urls'] else 'None'}")
             context_parts.append("")
-
+        
         # ARP Metrics
         if metrics.get('arp'):
             arp = metrics['arp']
@@ -535,7 +535,7 @@ def format_api_data_for_ai(api_data):
             context_parts.append(f"   Gateway IP: {arp['gateway_ip']}")
             context_parts.append(f"   Gateway MAC: {arp['gateway_mac']}")
             context_parts.append("")
-
+    
     # Client Wireless Stats
     if 'client_stats' in api_data and api_data['client_stats']:
         stats = api_data['client_stats']
@@ -554,7 +554,7 @@ def format_api_data_for_ai(api_data):
         context_parts.append(f"RX Retries: {stats.get('rx_retries', 'N/A')}")
         context_parts.append(f"Uptime: {stats.get('uptime', 'N/A')} seconds")
         context_parts.append("")
-
+    
     # AP Stats
     if 'ap_stats' in api_data and api_data['ap_stats']:
         ap = api_data['ap_stats']
@@ -570,7 +570,7 @@ def format_api_data_for_ai(api_data):
         context_parts.append(f"Connected Clients: {ap.get('num_clients', 'N/A')}")
         context_parts.append(f"Firmware: {ap.get('version', 'N/A')}")
         context_parts.append("")
-
+    
     # WLAN Config
     if 'wlan_config' in api_data and api_data['wlan_config']:
         wlans = api_data['wlan_config']
@@ -584,7 +584,7 @@ def format_api_data_for_ai(api_data):
             context_parts.append(f"   Auth: {wlan.get('auth', 'N/A')}")
             context_parts.append(f"   Encryption: {wlan.get('encryption', 'N/A')}")
             context_parts.append("")
-
+    
     return "\n".join(context_parts) if context_parts else ""
 
 def intelligent_api_router(question, context):
@@ -594,25 +594,25 @@ def intelligent_api_router(question, context):
     """
     site_id = context.get('site_id', '')
     mac_address = context.get('mac_address', '')
-
+    
     if not site_id or not mac_address:
         print("   ⚠️ Missing site_id or mac_address for API routing")
         return {}
-
+    
     # Detect intents
     intents = detect_api_intent(question, context)
-
+    
     if not intents:
         print("   ℹ️ No specific API intents detected - using context only")
         return {}
-
+    
     print(f"   🎯 Detected {len(intents)} intent(s): {list(intents.keys())[:3]}")
-
+    
     fetched_data = {}
-
+    
     # Fetch data based on detected intents (top 3 most relevant)
     for intent_name in list(intents.keys())[:3]:
-
+        
         # Synthetic Test (DHCP/DNS/ARP)
         if intent_name == 'synthetic_test':
             print(f"   📡 Calling: Synthetic Test API")
@@ -621,14 +621,14 @@ def intelligent_api_router(question, context):
                 metrics = parse_synthetic_test_metrics(test_data)
                 if metrics:
                     fetched_data['synthetic_test'] = metrics
-
+        
         # Client Wireless Stats
         elif intent_name == 'client_stats':
             print(f"   📡 Calling: Client Stats API")
             stats = fetch_client_wireless_stats(site_id, mac_address)
             if stats:
                 fetched_data['client_stats'] = stats
-
+        
         # AP Stats
         elif intent_name == 'ap_stats':
             print(f"   📡 Calling: AP Stats API")
@@ -638,14 +638,14 @@ def intelligent_api_router(question, context):
                 ap_stats = fetch_ap_stats(site_id, ap_mac)
                 if ap_stats:
                     fetched_data['ap_stats'] = ap_stats
-
+        
         # WLAN Config
         elif intent_name == 'wlan_config':
             print(f"   📡 Calling: WLAN Config API")
             wlan_config = fetch_wlan_config(site_id)
             if wlan_config:
                 fetched_data['wlan_config'] = wlan_config
-
+    
     return fetched_data
 
 # ============================================================================
@@ -683,13 +683,13 @@ def get_client_insights():
         found_site_name = None
 
         max_workers = min(20, len(sites))
-
+        
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_site = {
                 executor.submit(search_client_in_site, site, mac_no_colon): site 
                 for site in sites
             }
-
+            
             for future in as_completed(future_to_site):
                 result = future.result()
                 if result['found']:
@@ -924,48 +924,48 @@ def analyze_all_events(events):
     latest = max(events, key=lambda x: x.get('timestamp', 0))
     event_types_counter = Counter([e.get('type', 'UNKNOWN') for e in events])
     reason_codes_counter = Counter([e.get('reason_code', 0) for e in events if e.get('reason_code') not in ['N/A', None, 0]])
-
+    
     disconnection_events = [e for e in events if 'DISCONNECT' in e.get('type', '').upper() or 
                            'DEAUTH' in e.get('type', '').upper() or
                            'LEAVING' in e.get('type', '').upper()]
-
+    
     failure_events = [e for e in events if 'FAILURE' in e.get('type', '').upper() or 
                      'DENIED' in e.get('type', '').upper() or
                      'NAK' in e.get('type', '').upper()]
-
+    
     rssi_values = [e.get('rssi') for e in events if e.get('rssi') not in ['N/A', None]]
     snr_values = [e.get('snr') for e in events if e.get('snr') not in ['N/A', None]]
-
+    
     avg_rssi = sum(rssi_values) / len(rssi_values) if rssi_values else None
     avg_snr = sum(snr_values) / len(snr_values) if snr_values else None
     min_rssi = min(rssi_values) if rssi_values else None
-
+    
     patterns = detect_patterns(events)
-
+    
     issues = []
     suggestions = []
     severity = 'healthy'
-
+    
     latest_type = latest.get('type', '')
     latest_reason_code = latest.get('reason_code', 0)
     latest_status_code = latest.get('status_code', 0)
     latest_rssi = latest.get('rssi')
     latest_snr = latest.get('snr')
-
+    
     if 'FAILURE' in latest_type or 'DENIED' in latest_type or 'DISCONNECT' in latest_type:
         issues.append(f"⚠️ Latest Event Issue: {latest_type}")
         severity = 'warning'
-
+        
         if latest_reason_code and latest_reason_code != 0:
             reason_explanation = get_reason_code_explanation(latest_reason_code)
             suggestions.append(f"Latest Disconnect Reason Code {latest_reason_code}: {reason_explanation}")
-
+    
     if latest_status_code and latest_status_code != 0:
         status_explanation = get_status_code_explanation(latest_status_code)
         issues.append(f"⚠️ Non-zero Status Code: {latest_status_code}")
         suggestions.append(f"Status Code {latest_status_code}: {status_explanation}")
         severity = 'warning'
-
+    
     if len(disconnection_events) > 5:
         issues.append(f"🔴 Frequent Disconnections: {len(disconnection_events)} events in 7 days")
         suggestions.append("Client is disconnecting frequently. Check signal strength, roaming issues, or authentication problems.")
@@ -975,7 +975,7 @@ def analyze_all_events(events):
         suggestions.append("Monitor client for stability issues.")
         if severity == 'healthy':
             severity = 'warning'
-
+    
     if len(failure_events) > 10:
         issues.append(f"🔴 High Failure Rate: {len(failure_events)} failure events in 7 days")
         suggestions.append("Investigate authentication, DHCP, or DNS configuration issues.")
@@ -984,7 +984,7 @@ def analyze_all_events(events):
         issues.append(f"⚠️ Multiple Failures: {len(failure_events)} failure events detected")
         if severity == 'healthy':
             severity = 'warning'
-
+    
     if latest_rssi and latest_rssi != 'N/A':
         if latest_rssi < -80:
             issues.append(f"🔴 Critical Signal: Current RSSI {latest_rssi} dBm")
@@ -995,23 +995,23 @@ def analyze_all_events(events):
             suggestions.append("Consider repositioning client or AP for better coverage.")
             if severity == 'healthy':
                 severity = 'warning'
-
+    
     auth_failures = sum(1 for e in events if 'AUTH' in e.get('type', '').upper() and 'FAILURE' in e.get('type', '').upper())
     if auth_failures > 5:
         issues.append(f"🔴 Authentication Issues: {auth_failures} auth failures")
         suggestions.append("Check credentials, RADIUS server, and certificate validity.")
         severity = 'critical'
-
+    
     dhcp_failures = sum(1 for e in events if 'DHCP' in e.get('type', '').upper() and 'FAILURE' in e.get('type', '').upper())
     if dhcp_failures > 3:
         issues.append(f"🔴 DHCP Problems: {dhcp_failures} DHCP failures")
         suggestions.append("Verify DHCP server availability and IP address pool capacity.")
-
+    
     dns_failures = sum(1 for e in events if 'DNS' in e.get('type', '').upper() and 'FAILURE' in e.get('type', '').upper())
     if dns_failures > 3:
         issues.append(f"⚠️ DNS Issues: {dns_failures} DNS failures")
         suggestions.append("Check DNS server configuration and connectivity.")
-
+    
     top_reason_codes = []
     for reason_code, count in reason_codes_counter.most_common(3):
         explanation = get_reason_code_explanation(reason_code)
@@ -1020,11 +1020,11 @@ def analyze_all_events(events):
             'count': count,
             'explanation': explanation
         })
-
+    
     if not issues:
         issues.append("✅ No significant issues detected")
         suggestions.append("Client connection appears healthy and stable")
-
+    
     return {
         'latest_event_type': latest_type,
         'timestamp': datetime.fromtimestamp(latest.get('timestamp', 0)).strftime('%Y-%m-%d %H:%M:%S'),
@@ -1057,29 +1057,29 @@ def detect_patterns(events):
     """Detect patterns in events"""
     patterns = []
     sorted_events = sorted(events, key=lambda x: x.get('timestamp', 0))
-
+    
     connect_events = ['CLIENT_ASSOCIATION', 'CLIENT_AUTHENTICATED', 'CLIENT_IP_ASSIGNED']
     disconnect_events = ['CLIENT_DEAUTHENTICATED', 'CLIENT_DEASSOCIATION', 'MARVIS_EVENT_STA_LEAVING']
-
+    
     rapid_cycles = 0
     for i in range(len(sorted_events) - 1):
         current_event = sorted_events[i]
         next_event = sorted_events[i + 1]
-
+        
         time_diff = next_event.get('timestamp', 0) - current_event.get('timestamp', 0)
-
+        
         if (any(evt in current_event.get('type', '') for evt in connect_events) and
             any(evt in next_event.get('type', '') for evt in disconnect_events) and
             time_diff < 60):
             rapid_cycles += 1
-
+    
     if rapid_cycles > 3:
         patterns.append({
             'description': f'Rapid Connect/Disconnect Cycles: {rapid_cycles} occurrences',
             'suggestion': 'Client is connecting and disconnecting rapidly. Check for authentication issues, weak signal, or configuration problems.',
             'severity': 'critical'
         })
-
+    
     return patterns
 
 def get_reason_code_explanation(code):
@@ -1134,7 +1134,7 @@ def ai_assistant():
 
         # STEP 1: Intelligent API Routing - Detect intent and fetch data
         api_data = intelligent_api_router(question, context)
-
+        
         # STEP 2: Format fetched data for AI context
         api_context = format_api_data_for_ai(api_data) if api_data else ""
 
@@ -1148,10 +1148,10 @@ def ai_assistant():
 - Detected Issues: {', '.join(issues[:3]) if issues else 'None detected'}"""
 
         full_prompt = base_context
-
+        
         if api_context:
             full_prompt += f"\n\n{api_context}"
-
+        
         full_prompt += f"""
 
 **USER QUESTION:** {question}
@@ -1217,6 +1217,27 @@ def ai_assistant():
             'success': False,
             'error': f'Error: {str(e)}'
         }), 500
+
+if __name__ == '__main__':
+    print("=" * 60)
+    print("🚀 Juniper Mist Client Insights Dashboard")
+    print("   Flask Proxy Server - PORT 5002 (ENHANCED)")
+    print("=" * 60)
+    print("\n🧠 INTELLIGENT API ROUTING ENABLED")
+    print("   ✓ Automatic intent detection from user queries")
+    print("   ✓ Dynamic API call routing based on question")
+    print("   ✓ Multi-step API calls (synthetic test, etc.)")
+    print("   ✓ Real-time data fetching and analysis")
+    print("\n📡 Starting server with CONCURRENT SEARCH...")
+    print("\n✅ Server URL: http://localhost:5002")
+    print("✅ Searches across ALL sites automatically")
+    print("⚡ Uses parallel requests for faster searches")
+    print("🔍 Advanced event analysis and pattern detection")
+    print("🤖 AI-powered troubleshooting with live data")
+    print("\n💡 Make sure index.html is in the same directory!")
+    print("\n🔧 Press CTRL+C to stop")
+    print("=" * 60)
+    print()
 
     if __name__ == "__main__":
     # For local testing
