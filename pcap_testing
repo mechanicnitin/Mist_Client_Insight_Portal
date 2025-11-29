@@ -1,0 +1,1090 @@
+#!/usr/bin/env python3
+"""
+PCAP Network Analysis Tool
+
+This script analyzes PCAP files for network troubleshooting, focusing on:
+1. DHCP packet analysis - for IP addressing issues
+2. Wireless packet analysis - for Wi-Fi connectivity issues  
+3. EAP traffic flow analysis - for authentication issues
+
+Usage:
+    python3 pcap_analyzer.py <pcap_file> <mac_address>
+"""
+
+import sys
+import os
+import pyshark
+import ipaddress
+from collections import defaultdict, Counter
+import statistics
+import datetime
+import asyncio
+
+class PcapAnalyzer:
+    def __init__(self, pcap_file, mac_address):
+        self.pcap_file = pcap_file
+        self.mac_address = mac_address.lower()
+        self.results = {
+            "dhcp": {
+                "transactions": [],
+                "success_count": 0,
+                "failure_count": 0,
+                "server_ips": set(),
+                "issues": []
+            },
+            "wireless": {
+                "auth_attempts": 0,
+                "auth_success": 0,
+                "auth_failure": 0,
+                "assoc_attempts": 0,
+                "assoc_success": 0,
+                "assoc_failure": 0,
+                "reassoc_attempts": 0, 
+                "reassoc_success": 0,
+                "reassoc_failure": 0,
+                "deauth_count": 0,
+                "disassoc_count": 0,
+                "rssi_values": [],
+                "snr_values": [],
+                "ssids": set(),
+                "issues": []
+            },
+            "eap": {
+                "transactions": 0,
+                "success": 0,
+                "failure": 0,
+                "timeout": 0,
+                "identities": set(),
+                "types": Counter(),
+                "complete_flows": 0,
+                "incomplete_flows": 0,
+                "issues": []
+            }
+        }
+        
+    def run_analysis(self):
+        """Run all analysis modules and return results"""
+        print(f"Analyzing PCAP file: {self.pcap_file}")
+        print(f"Target MAC address: {self.mac_address}")
+        print("Loading PCAP file (this may take a while for large files)...")
+        
+        self.analyze_dhcp()
+        self.analyze_wireless()
+        self.analyze_eap()
+        
+        return self.results
+    
+### [Updated `analyze_dhcp`, `_process_dhcp_packets`, `_analyze_dhcp_transaction`] ###
+
+# Inside the class PcapAnalyzer
+
+### [Updated DHCP Analysis Logic for Full DORA Validation] ###
+### [Updated DHCP Analysis Logic - No Transaction ID Used] ###
+### [Updated DHCP Analysis Logic - Merge Full DORA Flow by MAC] ###
+
+    def analyze_dhcp(self):
+        """Analyze DHCP packets for issues"""
+        print("\nAnalyzing DHCP transactions...")
+    
+        # MAC-based transaction tracking (not transaction ID based)
+        mac_transactions = {
+            "discover": None,
+            "offer": None,
+            "request": None,
+            "ack": None,
+            "source_type": None,
+            "server_ips": set()
+        }
+    
+        # Analyze wired DHCP
+        try:
+            wired_filter = f'(eth.addr == {self.mac_address} and dhcp)'
+            wired_capture = pyshark.FileCapture(self.pcap_file, display_filter=wired_filter)
+            self._process_dhcp_packets_by_mac(wired_capture, mac_transactions, "wired")
+            wired_capture.close()
+        except Exception as e:
+            print(f"Error analyzing wired DHCP: {str(e)}")
+    
+        # Analyze wireless DHCP
+        try:
+            wireless_filter = f'(wlan.addr == {self.mac_address} and dhcp)'
+            wireless_capture = pyshark.FileCapture(self.pcap_file, display_filter=wireless_filter)
+            self._process_dhcp_packets_by_mac(wireless_capture, mac_transactions, "wireless")
+            wireless_capture.close()
+        except Exception as e:
+            print(f"Error analyzing wireless DHCP: {str(e)}")
+    
+        # Analyze the complete DORA flow by MAC
+        client_received_ip = False
+        assigned_ip = None
+    
+        # Check for complete DORA flow
+        if (mac_transactions["discover"] and mac_transactions["offer"] and 
+            mac_transactions["request"] and mac_transactions["ack"]):
+            # Successfully completed DORA flow
+            self.results["dhcp"]["success_count"] = 1
+            client_received_ip = True
+        
+            # Extract assigned IP from ACK
+            if hasattr(mac_transactions["ack"].dhcp, 'ip_your'):
+                assigned_ip = mac_transactions["ack"].dhcp.ip_your
+                self.results["dhcp"]["client_received_ip"] = True
+                self.results["dhcp"]["assigned_ip"] = assigned_ip
+            
+                # Add server IP
+                if hasattr(mac_transactions["ack"].ip, 'src'):
+                    self.results["dhcp"]["server_ip"] = mac_transactions["ack"].ip.src
+                
+                # Add lease time if available
+                if hasattr(mac_transactions["ack"].dhcp, 'option_ip_address_lease_time'):
+                    self.results["dhcp"]["lease_time"] = mac_transactions["ack"].dhcp.option_ip_address_lease_time
+        else:
+            # Incomplete DORA flow
+            self.results["dhcp"]["failure_count"] = 1
+        
+            # Determine which part of the flow failed
+            missing_parts = []
+            if not mac_transactions["discover"]:
+                missing_parts.append("DISCOVER")
+            if not mac_transactions["offer"]:
+                missing_parts.append("OFFER")
+            if not mac_transactions["request"]:
+                missing_parts.append("REQUEST")
+            if not mac_transactions["ack"]:
+                missing_parts.append("ACK")
+            
+            issue_description = f"Incomplete DHCP flow: Missing {', '.join(missing_parts)}"
+            self.results["dhcp"]["issues"].append({
+                "type": "DHCP Transaction Failed",
+                "issue": issue_description,
+                "recommendation": "Check network connectivity, DHCP server availability, or client configuration"
+            })
+            
+        # Add server IPs to results
+        self.results["dhcp"]["server_ips"] = mac_transactions["server_ips"]
+    
+    def _process_dhcp_packets_by_mac(self, capture, mac_transactions, source_type):
+        """Process DHCP packets and organize them by message type for a single MAC address"""
+        dhcp_type_map = {
+            "1": "discover",
+            "2": "offer",
+            "3": "request",
+            "4": "decline",
+            "5": "ack",
+            "6": "nak",
+            "7": "release",
+            "8": "inform"
+        }
+
+        for packet in capture:
+            try:
+                if not hasattr(packet, 'dhcp'):
+                    continue
+
+                if not mac_transactions["source_type"]:
+                    mac_transactions["source_type"] = source_type
+
+                if hasattr(packet.dhcp, 'option_dhcp'):
+                    raw_type = packet.dhcp.option_dhcp
+                    msg_type = dhcp_type_map.get(raw_type, raw_type.lower())
+
+                    if 'discover' in msg_type and self._is_packet_from_mac(packet, self.mac_address):
+                        mac_transactions["discover"] = packet
+                    elif 'offer' in msg_type and self._is_packet_to_mac(packet, self.mac_address):
+                        mac_transactions["offer"] = packet
+                        if hasattr(packet.ip, 'src'):
+                            mac_transactions["server_ips"].add(packet.ip.src)
+                    elif 'request' in msg_type and self._is_packet_from_mac(packet, self.mac_address):
+                        mac_transactions["request"] = packet
+                    elif 'ack' in msg_type and self._is_packet_to_mac(packet, self.mac_address):
+                        mac_transactions["ack"] = packet
+                        if hasattr(packet.ip, 'src'):
+                            mac_transactions["server_ips"].add(packet.ip.src)
+
+            except Exception as e:
+                print(f"Error processing DHCP packet: {str(e)}")
+                continue
+
+
+    def _is_packet_from_mac(self, packet, mac_address):
+        """Check if the packet is from our MAC address"""
+        if hasattr(packet, 'eth') and hasattr(packet.eth, 'src'):
+            return packet.eth.src.lower() == mac_address.lower()
+        if hasattr(packet, 'wlan') and hasattr(packet.wlan, 'sa'):
+            return packet.wlan.sa.lower() == mac_address.lower()
+        return False
+
+    def _is_packet_to_mac(self, packet, mac_address):
+        """Check if the packet is to our MAC address"""
+        if hasattr(packet, 'eth') and hasattr(packet.eth, 'dst'):
+            return packet.eth.dst.lower() == mac_address.lower()
+        if hasattr(packet, 'wlan') and hasattr(packet.wlan, 'da'):
+            return packet.wlan.da.lower() == mac_address.lower()
+        return False
+
+    def _process_dhcp_packets(self, capture, transactions, malformed_packets, source_type):
+        """Process a set of DHCP packets and organize them by transaction ID"""
+        for packet in capture:
+            try:
+                if not hasattr(packet, 'dhcp'):
+                    continue
+                
+                # Get transaction ID
+                txid = packet.dhcp.id.lower()
+                
+                # Check UDP ports to identify direction (client->server or server->client)
+                direction = None
+                if hasattr(packet, 'udp'):
+                    if hasattr(packet.udp, 'srcport') and hasattr(packet.udp, 'dstport'):
+                        src_port = int(packet.udp.srcport)
+                        dst_port = int(packet.udp.dstport)
+                        
+                        if src_port == 68 and dst_port == 67:
+                            direction = "client_to_server"
+                        elif src_port == 67 and dst_port == 68:
+                            direction = "server_to_client"
+                
+                # Check for malformed packets
+                if hasattr(packet, 'udp') and hasattr(packet.udp, 'length'):
+                    udp_length = int(packet.udp.length)
+                    
+                    # Check for malformed packets by looking for expert info fields
+                    is_malformed = False
+                    
+                    # Check different expert info fields that might indicate malformed packets
+                    if hasattr(packet.udp, '_ws_expert'):
+                        if hasattr(packet.udp._ws_expert, 'group') and 'Malformed' in packet.udp._ws_expert.group:
+                            is_malformed = True
+                        elif hasattr(packet.udp._ws_expert, 'message') and 'Bad length value' in packet.udp._ws_expert.message:
+                            is_malformed = True
+                        elif hasattr(packet.udp._ws_expert, 'severity') and packet.udp._ws_expert.severity == 'Error':
+                            is_malformed = True
+                    
+                    if is_malformed:
+                        malformed_packets.append({
+                            "txid": txid,
+                            "description": f"Bad length value {udp_length}",
+                            "packet": packet
+                        })
+                
+                # Initialize transaction if not exist
+                if txid not in transactions:
+                    transactions[txid] = {
+                        "discover": None,
+                        "offer": [],
+                        "request": None,
+                        "ack": None,
+                        "nak": None,
+                        "decline": None,
+                        "inform": None,
+                        "release": None,
+                        "source_type": source_type,
+                        "packets": []
+                    }
+                
+                # Add the packet to the appropriate list based on message type
+                msg_type = None
+                if hasattr(packet.dhcp, 'option_dhcp'):
+                    msg_type = packet.dhcp.option_dhcp.lower()
+                    
+                    if 'discover' in msg_type:
+                        transactions[txid]["discover"] = packet
+                    elif 'offer' in msg_type:
+                        transactions[txid]["offer"].append(packet)
+                    elif 'request' in msg_type:
+                        transactions[txid]["request"] = packet
+                    elif 'ack' in msg_type:
+                        transactions[txid]["ack"] = packet
+                    elif 'nak' in msg_type:
+                        transactions[txid]["nak"] = packet
+                    elif 'decline' in msg_type:
+                        transactions[txid]["decline"] = packet
+                    elif 'inform' in msg_type:
+                        transactions[txid]["inform"] = packet
+                    elif 'release' in msg_type:
+                        transactions[txid]["release"] = packet
+                
+                # Add to all packets list
+                transactions[txid]["packets"].append(packet)
+                
+            except Exception as e:
+                print(f"Error processing DHCP packet: {str(e)}")
+                continue
+
+    def _analyze_dhcp_transaction(self, txid, details):
+        """Analyze a single DHCP transaction for issues"""
+        result = {
+            "txid": txid,
+            "source_type": details["source_type"],
+            "status": "Failure",
+            "issue": "Unknown issue",
+            "recommendation": ""
+        }
+        
+        # Determine transaction type
+        if details["inform"] is not None:
+            # DHCPINFORM workflow
+            if details["ack"] is not None:
+                result["status"] = "Success"
+                result["transaction_type"] = "INFORM-ACK"
+                if hasattr(details["ack"].ip, 'src'):
+                    result["server_ip"] = details["ack"].ip.src
+                
+                # Extract IP address if available
+                if hasattr(details["ack"].dhcp, 'ip_your'):
+                    result["assigned_ip"] = details["ack"].dhcp.ip_your
+            else:
+                result["issue"] = "DHCPINFORM sent but no ACK received"
+                result["recommendation"] = "Check DHCP server connectivity and configuration"
+                result["transaction_type"] = "INFORM (incomplete)"
+        
+        elif details["discover"] is not None:
+            # Standard DORA process
+            result["transaction_type"] = "DORA"
+            
+            # Check for offers
+            if not details["offer"]:
+                result["issue"] = "DISCOVER sent but no OFFER received"
+                result["recommendation"] = "Check DHCP server connectivity and verify DHCP service is running"
+                return result
+            
+            # Multiple offers?
+            if len(details["offer"]) > 1:
+                server_ips = []
+                for p in details["offer"]:
+                    if hasattr(p, 'ip') and hasattr(p.ip, 'src'):
+                        server_ips.append(p.ip.src)
+                result["multiple_offers"] = True
+                result["offer_servers"] = server_ips
+                
+                # Still continue to check the rest of the process
+            
+            # Check for request
+            if details["request"] is None:
+                result["issue"] = "OFFER received but no REQUEST sent"
+                result["recommendation"] = "Check client DHCP client software, possible timeout or client issue"
+                return result
+            
+            # Check for ACK/NAK
+            if details["ack"] is None and details["nak"] is None:
+                result["issue"] = "REQUEST sent but no ACK/NAK received"
+                result["recommendation"] = "Check DHCP server connectivity, possible packet loss"
+                return result
+            
+            # NAK received
+            if details["nak"] is not None:
+                result["issue"] = "DHCP server sent NAK"
+                result["recommendation"] = "Check DHCP server logs, possible address pool exhaustion or policy violation"
+                if hasattr(details["nak"].ip, 'src'):
+                    result["server_ip"] = details["nak"].ip.src
+                return result
+            
+            # Success case - extract details
+            if details["ack"] is not None:
+                result["status"] = "Success"
+                
+                # Get server IP
+                if hasattr(details["ack"].ip, 'src'):
+                    result["server_ip"] = details["ack"].ip.src
+                
+                # Get requested IP if available
+                if details["request"] and hasattr(details["request"].dhcp, 'option_requested_ip_address'):
+                    result["requested_ip"] = details["request"].dhcp.option_requested_ip_address
+                
+                # Get assigned IP - THIS IS THE CRITICAL PART
+                if hasattr(details["ack"].dhcp, 'ip_your'):
+                    result["assigned_ip"] = details["ack"].dhcp.ip_your
+                
+                # Get lease time
+                if hasattr(details["ack"].dhcp, 'option_ip_address_lease_time'):
+                    result["lease_time"] = details["ack"].dhcp.option_ip_address_lease_time
+        
+        elif details["request"] is not None:
+            # Direct request (renewal)
+            result["transaction_type"] = "REQUEST-ACK (renewal)"
+            
+            if details["ack"] is not None:
+                result["status"] = "Success"
+                if hasattr(details["ack"].ip, 'src'):
+                    result["server_ip"] = details["ack"].ip.src
+                
+                # Extract assigned IP
+                if hasattr(details["ack"].dhcp, 'ip_your'):
+                    result["assigned_ip"] = details["ack"].dhcp.ip_your
+            elif details["nak"] is not None:
+                result["issue"] = "Renewal REQUEST sent but NAK received"
+                result["recommendation"] = "Client may have moved networks or lease expired"
+                if hasattr(details["nak"].ip, 'src'):
+                    result["server_ip"] = details["nak"].ip.src
+            else:
+                result["issue"] = "Renewal REQUEST sent but no response received"
+                result["recommendation"] = "Check DHCP server connectivity, possible packet loss"
+        
+        elif details["release"] is not None:
+            # Release process
+            result["transaction_type"] = "RELEASE"
+            result["status"] = "Success"  # RELEASE doesn't expect a response
+            if hasattr(details["release"].ip, 'dst'):
+                result["server_ip"] = details["release"].ip.dst
+        
+        else:
+            result["issue"] = "Incomplete or unrecognized DHCP transaction"
+            result["recommendation"] = "Capture may be incomplete or client using non-standard DHCP"
+        
+        return result
+
+
+
+
+    def analyze_wireless(self):
+        """Analyze wireless packets for connectivity issues"""
+        print("\nAnalyzing wireless connectivity...")
+        
+        try:
+            # Filter all wireless traffic related to our MAC
+            wireless_filter = f'wlan.addr == {self.mac_address}'
+            capture = pyshark.FileCapture(self.pcap_file, display_filter=wireless_filter)
+            
+            # Counters for different frame types
+            auth_requests = []
+            auth_responses = []
+            deauth_frames = []
+            assoc_requests = []
+            assoc_responses = []
+            reassoc_requests = []
+            reassoc_responses = []
+            disassoc_frames = []
+            
+            # Track 4-way handshake
+            eapol_frames = []
+            
+            # Process each wireless packet
+            for packet in capture:
+                if not hasattr(packet, 'wlan'):
+                    continue
+                
+                # Extract RSSI if available
+                if hasattr(packet, 'radiotap') and hasattr(packet.radiotap, 'dbm_antsignal'):
+                    self.results["wireless"]["rssi_values"].append(float(packet.radiotap.dbm_antsignal))
+                    
+                    # Calculate SNR if noise floor is available
+                    if hasattr(packet.radiotap, 'dbm_antnoise'):
+                        noise = float(packet.radiotap.dbm_antnoise)
+                        signal = float(packet.radiotap.dbm_antsignal)
+                        snr = signal - noise
+                        self.results["wireless"]["snr_values"].append(snr)
+                
+                # Extract SSID when available
+                if hasattr(packet.wlan, 'ssid'):
+                    self.results["wireless"]["ssids"].add(packet.wlan.ssid)
+                
+                # Process based on frame type/subtype
+                if hasattr(packet.wlan, 'fc_type') and hasattr(packet.wlan, 'fc_subtype'):
+                    frame_type = packet.wlan.fc_type
+                    frame_subtype = packet.wlan.fc_subtype
+                    
+                    # Management frames (type 0)
+                    if frame_type == '0':
+                        # Authentication (subtype 11)
+                        if frame_subtype == '11':
+                            if hasattr(packet.wlan, 'addr2') and packet.wlan.addr2.lower() == self.mac_address:
+                                auth_requests.append(packet)
+                            else:
+                                auth_responses.append(packet)
+                                
+                            # Check auth status
+                            if hasattr(packet.wlan, 'auth_status_code'):
+                                status_code = int(packet.wlan.auth_status_code)
+                                if status_code == 0:  # Success
+                                    self.results["wireless"]["auth_success"] += 1
+                                else:
+                                    self.results["wireless"]["auth_failure"] += 1
+                                    self.results["wireless"]["issues"].append({
+                                        "type": "Authentication Failure",
+                                        "status_code": status_code,
+                                        "recommendation": self._get_auth_status_recommendation(status_code)
+                                    })
+                        
+                        # Deauthentication (subtype 12)
+                        elif frame_subtype == '12':
+                            deauth_frames.append(packet)
+                            self.results["wireless"]["deauth_count"] += 1
+                            
+                            # Get reason code
+                            reason_code = int(packet.wlan.fixed_reason_code) if hasattr(packet.wlan, 'fixed_reason_code') else 0
+                            
+                            # Determine direction (AP to client or client to AP)
+                            direction = "AP to Client"
+                            if hasattr(packet.wlan, 'addr2') and packet.wlan.addr2.lower() == self.mac_address:
+                                direction = "Client to AP"
+                            
+                            self.results["wireless"]["issues"].append({
+                                "type": "Deauthentication",
+                                "direction": direction,
+                                "reason_code": reason_code,
+                                "timestamp": packet.sniff_time,
+                                "recommendation": self._get_deauth_reason_recommendation(reason_code, direction)
+                            })
+                        
+                        # Association Request (subtype 0)
+                        elif frame_subtype == '0':
+                            assoc_requests.append(packet)
+                            self.results["wireless"]["assoc_attempts"] += 1
+                            
+                            # Check for RSN errors
+                            self._check_rsn_issues(packet)
+                        
+                        # Association Response (subtype 1)
+                        elif frame_subtype == '1':
+                            assoc_responses.append(packet)
+                            
+                            # Check status code
+                            if hasattr(packet.wlan, 'fixed_status_code'):
+                                status_code = int(packet.wlan.fixed_status_code)
+                                if status_code == 0:  # Success
+                                    self.results["wireless"]["assoc_success"] += 1
+                                else:
+                                    self.results["wireless"]["assoc_failure"] += 1
+                                    self.results["wireless"]["issues"].append({
+                                        "type": "Association Failure",
+                                        "status_code": status_code,
+                                        "recommendation": self._get_assoc_status_recommendation(status_code)
+                                    })
+                        
+                        # Reassociation Request (subtype 2)
+                        elif frame_subtype == '2':
+                            reassoc_requests.append(packet)
+                            self.results["wireless"]["reassoc_attempts"] += 1
+                            
+                            # Check for RSN errors
+                            self._check_rsn_issues(packet)
+                        
+                        # Reassociation Response (subtype 3)
+                        elif frame_subtype == '3':
+                            reassoc_responses.append(packet)
+                            
+                            # Check status code
+                            if hasattr(packet.wlan, 'fixed_status_code'):
+                                status_code = int(packet.wlan.fixed_status_code)
+                                if status_code == 0:  # Success
+                                    self.results["wireless"]["reassoc_success"] += 1
+                                else:
+                                    self.results["wireless"]["reassoc_failure"] += 1
+                                    self.results["wireless"]["issues"].append({
+                                        "type": "Reassociation Failure",
+                                        "status_code": status_code,
+                                        "recommendation": self._get_assoc_status_recommendation(status_code)
+                                    })
+                        
+                        # Disassociation (subtype 10)
+                        elif frame_subtype == '10':
+                            disassoc_frames.append(packet)
+                            self.results["wireless"]["disassoc_count"] += 1
+                            
+                            reason_code = int(packet.wlan.fixed_reason_code) if hasattr(packet.wlan, 'fixed_reason_code') else 0
+                            direction = "AP to Client"
+                            if hasattr(packet.wlan, 'addr2') and packet.wlan.addr2.lower() == self.mac_address:
+                                direction = "Client to AP"
+                            
+                            self.results["wireless"]["issues"].append({
+                                "type": "Disassociation",
+                                "direction": direction,
+                                "reason_code": reason_code,
+                                "timestamp": packet.sniff_time,
+                                "recommendation": self._get_disassoc_reason_recommendation(reason_code, direction)
+                            })
+                
+                # Check for EAPOL (4-way handshake)
+                if hasattr(packet, 'eapol'):
+                    eapol_frames.append(packet)
+            
+            # Update counter totals
+            self.results["wireless"]["auth_attempts"] = len(auth_requests)
+            
+            # Check 4-way handshake completion
+            handshake_results = self._analyze_four_way_handshake(eapol_frames)
+            if handshake_results:
+                for result in handshake_results:
+                    if not result["completed"]:
+                        self.results["wireless"]["issues"].append({
+                            "type": "Incomplete 4-way Handshake",
+                            "message": f"4-way handshake missing message {result['missing_messages']}",
+                            "recommendation": "Check client supplicant, AP authentication settings, or potential signal issues"
+                        })
+            
+            # Calculate signal metrics
+            if self.results["wireless"]["rssi_values"]:
+                rssi_avg = statistics.mean(self.results["wireless"]["rssi_values"])
+                rssi_min = min(self.results["wireless"]["rssi_values"])
+                rssi_max = max(self.results["wireless"]["rssi_values"])
+                
+                # Add signal strength issue if applicable
+                if rssi_avg < -70:
+                    self.results["wireless"]["issues"].append({
+                        "type": "Poor Signal Strength",
+                        "rssi_avg": rssi_avg,
+                        "rssi_min": rssi_min,
+                        "recommendation": "Signal strength is poor. Consider moving closer to the AP or check for interference"
+                    })
+            
+            # Check for association without authentication
+            if len(assoc_requests) > self.results["wireless"]["auth_success"]:
+                self.results["wireless"]["issues"].append({
+                    "type": "Association without Authentication",
+                    "message": "Client attempted to associate without successful authentication",
+                    "recommendation": "Check client supplicant configuration or AP authentication settings"
+                })
+            
+            # Check for excessive deauths/disassociations
+            if self.results["wireless"]["deauth_count"] > 5:
+                self.results["wireless"]["issues"].append({
+                    "type": "Excessive Deauthentications",
+                    "count": self.results["wireless"]["deauth_count"],
+                    "recommendation": "Investigate potential RF interference, AP issues, or possible attack"
+                })
+                
+            # Close the capture
+            capture.close()
+                
+        except Exception as e:
+            print(f"Error analyzing wireless: {str(e)}")
+    
+    def _check_rsn_issues(self, packet):
+        """Check for RSN information issues in association requests"""
+        try:
+            if hasattr(packet, 'wlan_rsn_akms'):
+                akm_type = getattr(packet.wlan_rsn_akms, 'type', "")
+                
+                # Check for FT issues
+                if hasattr(packet, '_ws_expert'):
+                    expert_info = str(getattr(packet._ws_expert, 'message', ""))
+                    if 'Non-FT AKM suite is prohibited for FT' in expert_info:
+                        self.results["wireless"]["issues"].append({
+                            "type": "Non-FT AKM Suite Error",
+                            "akm_type": akm_type,
+                            "recommendation": "Client is using FT (Fast Transition) incorrectly. Check client supplicant configuration and AP 802.11r settings"
+                        })
+        except Exception as e:
+            print(f"Error checking RSN issues: {str(e)}")
+    
+    def _get_auth_status_recommendation(self, status_code):
+        """Get recommendation based on authentication status code"""
+        recommendations = {
+            1: "Unspecified failure - check AP logs for details",
+            2: "Previous authentication invalid - reauthenticate",
+            3: "AP cannot handle additional authenticated stations - try different AP",
+            4: "Client outside of allowed timeframe for authentication",
+            13: "Authentication algorithm not supported - check security settings",
+            14: "Wrong sequence number - retry authentication",
+            15: "Authentication challenge failed",
+            16: "Timeout waiting for next frame - check signal quality",
+            17: "AP running at capacity",
+            23: "Authentication rejected due to AP policy"
+        }
+        
+        return recommendations.get(status_code, f"Unknown status code: {status_code}")
+    
+    def _get_deauth_reason_recommendation(self, reason_code, direction):
+        """Get recommendation based on deauthentication reason code and direction"""
+        recommendations = {
+            1: "Unspecified reason - check AP logs for details",
+            2: "Previous authentication no longer valid - reauthenticate",
+            3: "Device leaving BSS - normal if client initiated",
+            4: "Inactivity timeout - check power management settings",
+            5: "AP resources constraint - try different AP",
+            6: "Non-authenticated class 2 frame received",
+            7: "Non-associated class 3 frame received",
+            8: "Device leaving BSS - normal if client roaming",
+            9: "Association without authentication - check supplicant configuration"
+        }
+        
+        base_rec = recommendations.get(reason_code, f"Unknown reason code: {reason_code}")
+        
+        if direction == "AP to Client":
+            return f"{base_rec} - AP initiated deauthentication"
+        else:
+            return f"{base_rec} - Client initiated deauthentication"
+    
+    def _get_assoc_status_recommendation(self, status_code):
+        """Get recommendation based on association status code"""
+        recommendations = {
+            1: "Unspecified failure - check AP logs for details",
+            2: "Refused due to capabilities mismatch - check security settings",
+            4: "Reserved",
+            5: "Disassociated due to AP being unable to handle all currently associated stations",
+            6: "Class 2 frame received from non-authenticated station",
+            7: "Class 3 frame received from non-associated station",
+            8: "Disassociated due to sending station leaving BSS",
+            9: "Station requesting association is not authenticated with responding station",
+            10: "Disassociated due to unacceptable power capability",
+            11: "Disassociated due to unacceptable supported channels",
+            12: "Reserved",
+            13: "Invalid information element - check client 802.11 implementation",
+            14: "Message integrity code (MIC) failure - possible security attack or driver issues",
+            15: "4-way handshake timeout - check authentication settings",
+            16: "Group key handshake timeout - check group key settings",
+            17: "Information element different from previous association - check security configuration",
+            18: "Invalid group cipher - check encryption settings",
+            19: "Invalid pairwise cipher - check encryption settings",
+            20: "Invalid AKMP - check authentication settings",
+            21: "Unsupported RSN information element version - check WPA/WPA2/WPA3 compatibility",
+            22: "Invalid RSN information element capabilities - check security configuration",
+            23: "IEEE 802.1X authentication failed - check RADIUS server",
+            24: "Cipher suite rejected per security policy - check encryption settings"
+        }
+        
+        return recommendations.get(status_code, f"Unknown status code: {status_code}")
+    
+    def _get_disassoc_reason_recommendation(self, reason_code, direction):
+        """Get recommendation based on disassociation reason code"""
+        recommendations = {
+            1: "Unspecified reason - check AP logs for details",
+            2: "Previous authentication no longer valid",
+            3: "Device leaving BSS - normal if client initiated",
+            4: "Inactivity timeout - check power management settings",
+            5: "AP resources constraint - try different AP",
+            6: "Non-authenticated class 2 frame received",
+            7: "Non-associated class 3 frame received",
+            8: "Device leaving BSS - normal if client roaming",
+            9: "Station requesting association is not authenticated",
+            10: "Disassociated due to unacceptable power capability element",
+            11: "Disassociated due to unacceptable supported channels element"
+        }
+        
+        base_rec = recommendations.get(reason_code, f"Unknown reason code: {reason_code}")
+        
+        if direction == "AP to Client":
+            return f"{base_rec} - AP initiated disassociation"
+        else:
+            return f"{base_rec} - Client initiated disassociation"
+            
+    def _analyze_four_way_handshake(self, eapol_frames):
+        """Analyze the 4-way handshake completion"""
+        # Group frames by (AP address, Client address) pair
+        handshakes = defaultdict(list)
+        
+        for frame in eapol_frames:
+            try:
+                if hasattr(frame, 'wlan') and hasattr(frame, 'eapol'):
+                    src = frame.wlan.sa
+                    dst = frame.wlan.da
+                    
+                    # Determine if AP or client
+                    ap_addr = src if src.lower() != self.mac_address.lower() else dst
+                    client_addr = src if src.lower() == self.mac_address.lower() else dst
+                    
+                    # Get message number if available
+                    if hasattr(frame.eapol, 'key_info_key_type') and int(frame.eapol.key_info_key_type) == 1:
+                        # This is a WPA key frame
+                        key_info = int(frame.eapol.key_info, 16)
+                        has_mic = (key_info & 0x0100) > 0
+                        has_install = (key_info & 0x0040) > 0
+                        has_ack = (key_info & 0x0080) > 0
+                        
+                        # Determine message number (1-4)
+                        if has_ack and not has_mic:
+                            msg_number = 1  # Message 1 (AP → Client)
+                        elif has_mic and not has_ack and not has_install:
+                            msg_number = 2  # Message 2 (Client → AP)
+                        elif has_ack and has_mic and has_install:
+                            msg_number = 3  # Message 3 (AP → Client)
+                        elif has_mic and not has_ack and not has_install:
+                            msg_number = 4  # Message 4 (Client → AP)
+                        else:
+                            msg_number = 0  # Unknown
+                        
+                        # Add to handshakes
+                        key = (ap_addr, client_addr)
+                        handshakes[key].append((msg_number, frame))
+            except Exception as e:
+                print(f"Error analyzing handshake frame: {str(e)}")
+                continue
+        
+        # Analyze each handshake
+        results = []
+        for key, frames in handshakes.items():
+            # Sort by message number and time
+            frames.sort(key=lambda x: (x[0], x[1].sniff_time))
+            
+            # Check if we have all 4 messages
+            message_numbers = set(msg[0] for msg in frames)
+            complete = {1, 2, 3, 4}.issubset(message_numbers)
+            
+            # Find missing messages
+            missing = {1, 2, 3, 4} - message_numbers
+            missing_str = ", ".join(str(m) for m in missing)
+            
+            # Add result
+            results.append({
+                "ap_addr": key[0],
+                "client_addr": key[1],
+                "completed": complete,
+                "missing_messages": missing_str if missing else None
+            })
+        
+        return results
+
+    def analyze_eap(self):
+        """Analyze EAP packets for authentication issues"""
+        print("\nAnalyzing EAP traffic...")
+        
+        try:
+            # Filter for EAP traffic related to our MAC
+            eap_filter = f'(wlan.addr == {self.mac_address} or eth.addr == {self.mac_address}) and eap'
+            capture = pyshark.FileCapture(self.pcap_file, display_filter=eap_filter)
+            
+            # Track EAP sessions
+            sessions = defaultdict(list)
+            
+            # Process each EAP packet
+            for packet in capture:
+                if not hasattr(packet, 'eap'):
+                    continue
+                
+                # Get EAP ID from packet
+                eap_id = int(packet.eap.id) if hasattr(packet.eap, 'id') else 0
+                
+                # Get source MAC - determines if it's from authenticator or supplicant
+                src_mac = ""
+                if hasattr(packet, 'wlan'):
+                    src_mac = packet.wlan.sa.lower()
+                elif hasattr(packet, 'eth'):
+                    src_mac = packet.eth.src.lower()
+                
+                # Add to sessions dictionary
+                if src_mac:
+                    session_key = eap_id
+                    sessions[session_key].append((src_mac, packet))
+                
+                # Count by EAP type if available
+                if hasattr(packet.eap, 'type'):
+                    eap_type = packet.eap.type
+                    self.results["eap"]["types"][eap_type] += 1
+                
+                # Extract EAP identity
+                if hasattr(packet.eap, 'identity'):
+                    self.results["eap"]["identities"].add(packet.eap.identity)
+                
+                # Check for success/failure
+                if hasattr(packet.eap, 'code'):
+                    eap_code = int(packet.eap.code)
+                    self.results["eap"]["transactions"] += 1
+                    
+                    if eap_code == 3:  # Success
+                        self.results["eap"]["success"] += 1
+                    elif eap_code == 4:  # Failure
+                        self.results["eap"]["failure"] += 1
+                        
+                        # Add to issues
+                        self.results["eap"]["issues"].append({
+                            "type": "EAP Authentication Failure",
+                            "id": eap_id,
+                            "recommendation": "Check user credentials, RADIUS server configuration, or certificate issues"
+                        })
+            
+            # Analyze each EAP session
+            for session_id, packets in sessions.items():
+                # Was the session completed?
+                success = any(int(p[1].eap.code) == 3 for p in packets if hasattr(p[1].eap, 'code'))
+                failure = any(int(p[1].eap.code) == 4 for p in packets if hasattr(p[1].eap, 'code'))
+                
+                if success:
+                    self.results["eap"]["complete_flows"] += 1
+                elif failure:
+                    # Already counted above
+                    pass
+                else:
+                    self.results["eap"]["incomplete_flows"] += 1
+                    self.results["eap"]["timeout"] += 1
+                    
+                    # Get last type
+                    last_type = None
+                    for p in reversed(packets):
+                        if hasattr(p[1].eap, 'type'):
+                            last_type = p[1].eap.type
+                            break
+                    
+                    # Add to issues
+                    self.results["eap"]["issues"].append({
+                        "type": "EAP Session Timeout",
+                        "id": session_id,
+                        "last_type": last_type,
+                        "recommendation": "Check network connectivity, RADIUS server availability, or client timeout settings"
+                    })
+            
+            # Check for TLS certificate issues
+            self._analyze_eap_tls_issues(capture)
+            
+            # Close the capture
+            capture.close()
+            
+        except Exception as e:
+            print(f"Error analyzing EAP: {str(e)}")
+    
+    def _analyze_eap_tls_issues(self, capture):
+        """Analyze EAP-TLS specific issues"""
+        try:
+            # Reset and process packets again to look for TLS alerts
+            capture.reset()
+            
+            for packet in capture:
+                if hasattr(packet, 'tls'):
+                    # Check for TLS alerts
+                    if hasattr(packet.tls, 'record_content_type') and packet.tls.record_content_type == '21':  # Alert
+                        if hasattr(packet.tls, 'alert_message_desc'):
+                            alert_desc = int(packet.tls.alert_message_desc)
+                            alert_severity = packet.tls.alert_message_severity if hasattr(packet.tls, 'alert_message_severity') else "Unknown"
+                            
+                            # Add to issues
+                            self.results["eap"]["issues"].append({
+                                "type": "TLS Alert in EAP",
+                                "alert_description": alert_desc,
+                                "severity": alert_severity,
+                                "recommendation": self._get_tls_alert_recommendation(alert_desc)
+                            })
+        except Exception as e:
+            print(f"Error analyzing EAP-TLS issues: {str(e)}")
+    
+    def _get_tls_alert_recommendation(self, alert_code):
+        """Get recommendation based on TLS alert code"""
+        recommendations = {
+            0: "TLS Close Notify - normal connection closure",
+            10: "Unexpected message - check TLS implementation",
+            20: "Bad record MAC - possible integrity issue or MitM attack",
+            22: "Record overflow - check TLS implementation",
+            40: "Handshake failure - general handshake issue, check logs",
+            42: "Bad certificate - check client certificate",
+            43: "Unsupported certificate - certificate not compatible with server",
+            44: "Certificate revoked - certificate has been revoked",
+            45: "Certificate expired - certificate has expired",
+            46: "Certificate unknown - certificate not recognized",
+            47: "Illegal parameter - check TLS settings",
+            48: "Unknown CA - certificate authority not recognized",
+            50: "Decode error - malformed TLS message",
+            51: "Decrypt error - crypto failure or wrong key",
+            70: "Protocol version - TLS version mismatch",
+            71: "Insufficient security - server requires stronger security",
+            80: "Internal error - server internal error, check logs",
+            110: "Certificate unobtainable - couldn't get certificate",
+            112: "Unrecognized name - SNI hostname not recognized",
+            116: "Certificate required - client authentication required"
+        }
+        
+        return recommendations.get(alert_code, f"Unknown TLS alert code: {alert_code}")
+
+def main():
+    if len(sys.argv) < 3:
+        print(f"Usage: {sys.argv[0]} <pcap_file> <mac_address>")
+        sys.exit(1)
+        
+    pcap_file = sys.argv[1]
+    mac_address = sys.argv[2]
+    
+    # Verify PCAP file exists
+    if not os.path.isfile(pcap_file):
+        print(f"Error: PCAP file '{pcap_file}' not found")
+        sys.exit(1)
+    
+    # Create analyzer and run analysis
+    analyzer = PcapAnalyzer(pcap_file, mac_address)
+    results = analyzer.run_analysis()
+    
+    # Output results
+    # Output results
+    print("\n============= ANALYSIS RESULTS =============\n")
+    
+    # DHCP results
+    print("DHCP Analysis:")
+    if results['dhcp'].get('client_received_ip', False):
+        print(f"  RESULT: Client {mac_address} successfully received IP {results['dhcp']['assigned_ip']}")
+        print(f"  DHCP Server: {results['dhcp'].get('server_ip', 'Unknown')}")
+        if results['dhcp'].get('lease_time'):
+            print(f"  Lease Time: {results['dhcp'].get('lease_time')} seconds")
+    else:
+        print(f"  RESULT: Client {mac_address} did not receive an IP address")
+    
+    print(f"  Successful transactions: {results['dhcp']['success_count']}")
+    print(f"  Failed transactions: {results['dhcp']['failure_count']}")
+    
+    if results['dhcp']['server_ips']:
+        print(f"  DHCP servers: {', '.join(results['dhcp']['server_ips'])}")
+    if results['dhcp']['issues']:
+        print("\n  DHCP Issues:")
+        for issue in results['dhcp']['issues']:
+            print(f"    - {issue['type']}: {issue['issue']}")
+            print(f"      Recommendation: {issue['recommendation']}")
+    
+    # Wireless results
+    print("\nWireless Analysis:")
+    print(f"  Authentication attempts: {results['wireless']['auth_attempts']}")
+    print(f"  Authentication success: {results['wireless']['auth_success']}")
+    print(f"  Authentication failures: {results['wireless']['auth_failure']}")
+    print(f"  Association attempts: {results['wireless']['assoc_attempts']}")
+    print(f"  Association success: {results['wireless']['assoc_success']}")
+    print(f"  Association failures: {results['wireless']['assoc_failure']}")
+    print(f"  Reassociation attempts: {results['wireless']['reassoc_attempts']}")
+    print(f"  Reassociation success: {results['wireless']['reassoc_success']}")
+    print(f"  Reassociation failures: {results['wireless']['reassoc_failure']}")
+    print(f"  Deauthentication count: {results['wireless']['deauth_count']}")
+    print(f"  Disassociation count: {results['wireless']['disassoc_count']}")
+    
+    if results['wireless']['ssids']:
+        print(f"  SSIDs: {', '.join(results['wireless']['ssids'])}")
+    
+    if results['wireless']['rssi_values']:
+        rssi_avg = statistics.mean(results['wireless']['rssi_values'])
+        rssi_min = min(results['wireless']['rssi_values'])
+        rssi_max = max(results['wireless']['rssi_values'])
+        print(f"  Signal strength (RSSI): Avg: {rssi_avg:.1f} dBm, Min: {rssi_min:.1f} dBm, Max: {rssi_max:.1f} dBm")
+    
+    if results['wireless']['snr_values']:
+        snr_avg = statistics.mean(results['wireless']['snr_values'])
+        print(f"  Signal-to-Noise Ratio (SNR): Avg: {snr_avg:.1f} dB")
+    
+    if results['wireless']['issues']:
+        print("\n  Wireless Issues:")
+        for issue in results['wireless']['issues']:
+            print(f"    - {issue['type']}")
+            if 'recommendation' in issue:
+                print(f"      Recommendation: {issue['recommendation']}")
+    
+    # EAP results
+    print("\nEAP Analysis:")
+    print(f"  Total transactions: {results['eap']['transactions']}")
+    print(f"  Success count: {results['eap']['success']}")
+    print(f"  Failure count: {results['eap']['failure']}")
+    print(f"  Timeout count: {results['eap']['timeout']}")
+    print(f"  Complete authentication flows: {results['eap']['complete_flows']}")
+    print(f"  Incomplete authentication flows: {results['eap']['incomplete_flows']}")
+    
+    if results['eap']['identities']:
+        print(f"  Identities: {', '.join(results['eap']['identities'])}")
+    
+    if results['eap']['types']:
+        print("  EAP Types:")
+        for eap_type, count in results['eap']['types'].items():
+            type_name = {
+                '1': 'Identity',
+                '2': 'Notification',
+                '3': 'NAK',
+                '4': 'MD5-Challenge',
+                '13': 'TLS',
+                '21': 'TTLS',
+                '25': 'PEAP',
+                '43': 'Fast'
+            }.get(eap_type, eap_type)
+            
+            print(f"    - {type_name}: {count}")
+    
+    if results['eap']['issues']:
+        print("\n  EAP Issues:")
+        for issue in results['eap']['issues']:
+            print(f"    - {issue['type']}")
+            if 'recommendation' in issue:
+                print(f"      Recommendation: {issue['recommendation']}")
+    
+    print("\n============================================\n")
+
+if __name__ == "__main__":
+    main()
+
